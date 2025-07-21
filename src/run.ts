@@ -79,4 +79,5 @@ export default async function run(executor: IExecutor, queue: AsyncIterable<ITas
 }
 
 // run(new Executor(), getQueue(), 3);
-run(new Executor(), queueExt, 3);
+// run(new Executor(), queueExt, 3);
+console.log('end');
