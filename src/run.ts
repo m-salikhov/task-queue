@@ -40,7 +40,7 @@ export default async function run(executor: IExecutor, queue: AsyncIterable<ITas
 
   //обработка отдельной очереди по targetId
   async function processTaskQueue(targetId: number) {
-    console.log(' processTaskQueue ~ targetId:', targetId);
+    // console.log(' processTaskQueue ~ targetId:', targetId);
 
     const taskQueueData = taskQueues.get(targetId);
     //если есть активная задача, то ничего не делаем
@@ -80,4 +80,3 @@ export default async function run(executor: IExecutor, queue: AsyncIterable<ITas
 
 // run(new Executor(), getQueue(), 3);
 // run(new Executor(), queueExt, 3);
-console.log('end');
