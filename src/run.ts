@@ -7,46 +7,44 @@ import infiniteQueue from './infinityQueue';
 export default async function run(executor: IExecutor, queue: AsyncIterable<ITask>, maxThreads = 0) {
   maxThreads = Math.max(0, maxThreads);
 
-  // Разбивает очередь задач на отдельные очереди по targetId. Для контроля очередности исполнения по targetId
+  // Отдельные очереди по targetId. Для контроля очередности исполнения по targetId
   // Каждая очередь обрабатывается в отдельном потоке. hasPendingTask - есть ли исполняющаяся задача в очереди
   const taskQueues: Map<number, { hasPendingTask: boolean; queueTasks: ITask[] }> = new Map();
 
   // Таски исполняющиеся в данный момент
   const pendingTasks: Map<number, Promise<void>> = new Map();
-  // const completedTasks = new Set<string>();
 
   //собираем задачи в очереди по targetId и запускаем каждую
   async function consumeQueue(q: AsyncIterable<ITask>) {
     for await (const task of q) {
       // если максимальное количество активных задач достигнуто, ждем завершения одной
+      // гарантируем выполнение задач при бесконечном добавлении задач в очередь
       if (maxThreads > 0 && pendingTasks.size >= maxThreads) {
         await Promise.race(pendingTasks.values());
       }
 
-      // console.log('TASK IN CYCLE ' + task.targetId + task.action);
-
       const { targetId } = task;
 
-      if (!taskQueues.has(targetId)) {
-        //создаем очередь, если ещё нет. И запускаем эту очередь
+      //получаем очередь по targetId
+      const taskQueueByTargetId = taskQueues.get(targetId)?.queueTasks;
+
+      if (!taskQueueByTargetId) {
+        //создаем очередь, если её ещё нет. И запускаем эту очередь
         taskQueues.set(targetId, { hasPendingTask: false, queueTasks: [task] });
         processTaskQueue(targetId);
       } else {
-        //добавляем задачу в очередь, если есть очередь
-        taskQueues.get(targetId)!.queueTasks.push(task);
+        //добавляем задачу в очередь, если она существует
+        taskQueueByTargetId.push(task);
       }
     }
-
-    // console.log('cycle END');
   }
 
   //обработка отдельной очереди по targetId
   async function processTaskQueue(targetId: number) {
-    // console.log(' processTaskQueue ~ targetId:', targetId);
     // получаем очередь по targetId
     const taskQueueData = taskQueues.get(targetId);
 
-    //если есть активная задача или очередь не существует, то ничего не делаем
+    //если очередь не существует или есть активная задача, то ничего не делаем
     if (!taskQueueData || taskQueueData.hasPendingTask) {
       return;
     }
@@ -63,10 +61,20 @@ export default async function run(executor: IExecutor, queue: AsyncIterable<ITas
       // снова запускаем обработку очереди по данному targetId
       processTaskQueue(targetId);
     } else {
-      const task = taskQueueData.queueTasks.shift()!;
-      // completedTasks.add(task.targetId + task.action);
+      const task = taskQueueData.queueTasks.shift();
 
-      let promise = executor.executeTask(task).finally(() => {
+      if (!task) return;
+
+      // запускаем задачу
+      const promise = executor.executeTask(task);
+
+      // запоминаем исполняющуюся задачу
+      pendingTasks.set(task.targetId, promise);
+
+      // переводим очередь в состояние "есть активная задача"
+      taskQueueData.hasPendingTask = true;
+
+      promise.finally(() => {
         // по окончанию задачи:
         // переводим очередь в состояние "нет активных задач",
         // удаляем задачу из исполняющихся,
@@ -74,29 +82,24 @@ export default async function run(executor: IExecutor, queue: AsyncIterable<ITas
         taskQueueData.hasPendingTask = false;
         pendingTasks.delete(targetId);
         processTaskQueue(targetId);
+
+        // по выполнению последней задачи из запущенных, запускаем очередь - проверка на добавленные задачи
         if (pendingTasks.size === 0) {
           consumeQueue(queue);
         }
       });
-
-      // запоминаем исполняющуюся задачу
-      pendingTasks.set(task.targetId, promise);
-
-      // переводим очередь в состояние "есть активная задача"
-      taskQueueData.hasPendingTask = true;
     }
   }
 
   await consumeQueue(queue);
 
-  // ждём завершения всех активных задач
+  // ждём завершения всех оставшихся активных задач
   while (pendingTasks.size > 0) {
-    // console.log('waiting for pending tasks');
     await Promise.all([...pendingTasks.values()]);
   }
 }
 
-run(new Executor(), getQueue());
+// run(new Executor(), getQueue());
 // run(new Executor(), getQueue(), 2);
 // run(new Executor(), getQueue(), 3);
 // run(new Executor(), getQueue(), 5);
