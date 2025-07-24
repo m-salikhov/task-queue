@@ -89,3 +89,4 @@ async function run(executor: IExecutor, queue: AsyncIterable<ITask>, maxThreads 
 У коректного решения `npm run test` дает следующий вывод:
 
 <img width="440" alt="Code_RLL5YHVeFu" src="https://github.com/user-attachments/assets/76743e2a-5fdb-4d19-8d3e-0a0a8f01c6b8">
+

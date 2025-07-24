@@ -8,45 +8,35 @@ export default async function run(executor: IExecutor, queue: AsyncIterable<ITas
   maxThreads = Math.max(0, maxThreads);
 
   // Отдельные очереди по targetId. Для контроля очередности исполнения по targetId
-  // Каждая очередь обрабатывается в отдельном потоке. hasPendingTask - есть ли исполняющаяся задача в очереди
+  // Каждая очередь обрабатывается в отдельном "потоке". hasPendingTask - есть ли исполняющаяся задача в очереди
   const taskQueues: Map<number, { hasPendingTask: boolean; queueTasks: ITask[] }> = new Map();
 
-  // Таски исполняющиеся в данный момент
+  // Задачи исполняющиеся в данный момент
   const pendingTasks: Map<number, Promise<void>> = new Map();
-
-  // Флаг, что идёт исполнение очереди
-  let isConsuming = false;
 
   //собираем задачи в очереди по targetId и запускаем каждую
   async function consumeQueue(q: AsyncIterable<ITask>) {
-    if (isConsuming) {
-      // Уже происходит потребление очереди — не запускаемся повторно
-      return;
+    // если максимальное количество активных задач достигнуто, ждем завершения одной
+    // гарантируем выполнение задач при бесконечном добавлении задач в очередь
+    if (maxThreads > 0 && pendingTasks.size >= maxThreads) {
+      await Promise.race(pendingTasks.values());
     }
 
-    // отмечаем, что потребление очереди началось
-    isConsuming = true;
-
-    try {
-      for await (const task of q) {
-        // Если достигли лимита maxThreads — ждём завершения хотя бы одной задачи
-        if (maxThreads > 0 && pendingTasks.size >= maxThreads) {
-          await Promise.race(pendingTasks.values());
-        }
-
-        const { targetId } = task;
-        const taskQueueByTargetId = taskQueues.get(targetId)?.queueTasks;
-        if (!taskQueueByTargetId) {
-          // Создаём новую очередь, если ещё нет
-          taskQueues.set(targetId, { hasPendingTask: false, queueTasks: [task] });
-          processTaskQueue(targetId);
-        } else {
-          taskQueueByTargetId.push(task);
-        }
+    for await (const task of q) {
+      // Если достигли лимита maxThreads — ждём завершения хотя бы одной задачи
+      if (maxThreads > 0 && pendingTasks.size >= maxThreads) {
+        await Promise.race(pendingTasks.values());
       }
-    } finally {
-      // отмечаем, что потребление очереди завершено
-      isConsuming = false;
+
+      const { targetId } = task;
+      const taskQueueByTargetId = taskQueues.get(targetId)?.queueTasks;
+      if (!taskQueueByTargetId) {
+        // Создаём новую очередь, если ещё нет
+        taskQueues.set(targetId, { hasPendingTask: false, queueTasks: [task] });
+        processTaskQueue(targetId);
+      } else {
+        taskQueueByTargetId.push(task);
+      }
     }
   }
 
@@ -94,8 +84,10 @@ export default async function run(executor: IExecutor, queue: AsyncIterable<ITas
         pendingTasks.delete(targetId);
         processTaskQueue(targetId);
 
-        // пробуем запустить очередь заново - проверка на добавленные задачи
-        consumeQueue(queue);
+        // пробуем запустить очередь по завершению всех задач - проверка на добавленные задачи
+        if (pendingTasks.size === 0) {
+          consumeQueue(queue);
+        }
       });
     }
   }
