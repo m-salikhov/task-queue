@@ -14,28 +14,39 @@ export default async function run(executor: IExecutor, queue: AsyncIterable<ITas
   // Таски исполняющиеся в данный момент
   const pendingTasks: Map<number, Promise<void>> = new Map();
 
+  // Флаг, что идёт исполнение очереди
+  let isConsuming = false;
+
   //собираем задачи в очереди по targetId и запускаем каждую
   async function consumeQueue(q: AsyncIterable<ITask>) {
-    for await (const task of q) {
-      // если максимальное количество активных задач достигнуто, ждем завершения одной
-      // гарантируем выполнение задач при бесконечном добавлении задач в очередь
-      if (maxThreads > 0 && pendingTasks.size >= maxThreads) {
-        await Promise.race(pendingTasks.values());
+    if (isConsuming) {
+      // Уже происходит потребление очереди — не запускаемся повторно
+      return;
+    }
+
+    // отмечаем, что потребление очереди началось
+    isConsuming = true;
+
+    try {
+      for await (const task of q) {
+        // Если достигли лимита maxThreads — ждём завершения хотя бы одной задачи
+        if (maxThreads > 0 && pendingTasks.size >= maxThreads) {
+          await Promise.race(pendingTasks.values());
+        }
+
+        const { targetId } = task;
+        const taskQueueByTargetId = taskQueues.get(targetId)?.queueTasks;
+        if (!taskQueueByTargetId) {
+          // Создаём новую очередь, если ещё нет
+          taskQueues.set(targetId, { hasPendingTask: false, queueTasks: [task] });
+          processTaskQueue(targetId);
+        } else {
+          taskQueueByTargetId.push(task);
+        }
       }
-
-      const { targetId } = task;
-
-      //получаем очередь по targetId
-      const taskQueueByTargetId = taskQueues.get(targetId)?.queueTasks;
-
-      if (!taskQueueByTargetId) {
-        //создаем очередь, если её ещё нет. И запускаем эту очередь
-        taskQueues.set(targetId, { hasPendingTask: false, queueTasks: [task] });
-        processTaskQueue(targetId);
-      } else {
-        //добавляем задачу в очередь, если она существует
-        taskQueueByTargetId.push(task);
-      }
+    } finally {
+      // отмечаем, что потребление очереди завершено
+      isConsuming = false;
     }
   }
 
@@ -83,10 +94,8 @@ export default async function run(executor: IExecutor, queue: AsyncIterable<ITas
         pendingTasks.delete(targetId);
         processTaskQueue(targetId);
 
-        // по выполнению последней задачи из запущенных, запускаем очередь - проверка на добавленные задачи
-        if (pendingTasks.size === 0) {
-          consumeQueue(queue);
-        }
+        // пробуем запустить очередь заново - проверка на добавленные задачи
+        consumeQueue(queue);
       });
     }
   }
